@@ -1,8 +1,8 @@
 [package]
 name = "conduit"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Backend for Conduit: Deep Work Assistant"
+authors = ["kraitsura"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -22,4 +22,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+reqwest = { version = "0.11", features = ["json"] }
+dotenv = "0.15"
 
+[features]
+custom-protocol = ["tauri/custom-protocol"]
