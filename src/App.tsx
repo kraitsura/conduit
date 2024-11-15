@@ -1,4 +1,4 @@
-import { TaskBreak } from './components/TaskBreak'
+import TaskBreak from '@/components/TaskBreak'
 import './App.css'
 
 function App() {

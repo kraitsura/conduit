@@ -1,124 +1,172 @@
-import { Input } from "./ui/input"
-import { useState } from 'react'
-import { useTaskBreakdown } from '../hooks/useTaskBreakdown'
+import { useState } from "react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Checkbox } from "@/components/ui/checkbox"
+import { useTaskBreakdown } from "@/hooks/useTaskBreakdown"
+import { Clock, Wrench, Link2, ArrowRight } from "lucide-react"
+import { MentalEnergy, SubTask } from '@/types'
 
-export function TaskBreak() {
-  const [task, setTask] = useState<string>('')
-  const [selectedSubtasks, setSelectedSubtasks] = useState<number[]>([])
-  const { loading, error, subtasks, structure, getSubtasks, getOverallStructure } = useTaskBreakdown()
+function TaskBreak() {
+  const [task, setTask] = useState("")
+  const [selectedTasks, setSelectedTasks] = useState<SubTask[]>([])
+  const { loading, error, subtasks, getSubtasks } = useTaskBreakdown()
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
-    try {
+  const handleBreakdown = async () => {
+    if (task.trim()) {
       await getSubtasks(task)
-      setSelectedSubtasks([])
-    } catch (error) {
-      // Error handling is managed by the hook
     }
   }
 
-  const handleSubtaskSelection = (index: number) => {
-    setSelectedSubtasks(prev => 
-      prev.includes(index) ? prev.filter(i => i !== index) : [...prev, index]
+  const handleTaskSelection = (subtask: SubTask) => {
+    setSelectedTasks((prev) =>
+      prev.some((t) => t.id === subtask.id)
+        ? prev.filter((t) => t.id !== subtask.id)
+        : [...prev, subtask]
     )
   }
 
-  const handleGetStructure = async () => {
-    try {
-      const selectedSubtaskData = selectedSubtasks.map(index => subtasks[index])
-      await getOverallStructure(selectedSubtaskData)
-    } catch (error) {
-      // Error handling is managed by the hook
+  const formatTime = (minutes: number) => {
+    const hours = Math.floor(minutes / 60)
+    const remainingMinutes = minutes % 60
+    return hours > 0
+      ? `${hours}h ${remainingMinutes}m`
+      : `${remainingMinutes}m`
+  }
+
+  const getEnergyColor = (energy: MentalEnergy) => {
+    switch (energy) {
+      case MentalEnergy.Low: return 'bg-green-600'
+      case MentalEnergy.Medium: return 'bg-yellow-600'
+      case MentalEnergy.High: return 'bg-red-600'
+      default: return 'bg-gray-600'
     }
   }
 
+  const handleGeneratePlan = () => {
+    console.log("Generating plan for:", selectedTasks)
+    // Implement plan generation logic here
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-900 to-purple-900 p-4">
-      <div className="container mx-auto max-w-3xl">
-        <h1 className="text-4xl font-bold mb-8 text-white drop-shadow-lg text-center">
-          TaskForce
-          <span className="block text-lg font-normal mt-2 text-blue-200">AI-Powered Task Breakdown</span>
-        </h1>
+    <div className="min-h-screen bg-gray-900 text-gray-100 p-4">
+      <div className="max-w-4xl mx-auto space-y-6">
+        <Card className="bg-gray-800 border-gray-700">
+          <CardHeader>
+            <CardTitle>Task Breakdown</CardTitle>
+            <CardDescription>Enter your task and click 'Breakdown' to get started</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex space-x-2">
+              <Input
+                placeholder="Enter your task here..."
+                value={task}
+                onChange={(e) => setTask(e.target.value)}
+                className="bg-gray-700 border-gray-600 text-gray-100"
+              />
+              <Button onClick={handleBreakdown} disabled={loading || !task.trim()}>
+                {loading ? "Breaking down..." : "Breakdown"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
         {error && (
-          <div className="mb-6 animate-fadeIn">
-            <p className="text-red-500 text-center bg-white/90 backdrop-blur-sm rounded-lg p-3 shadow-lg">
-              {error}
-            </p>
-          </div>
+          <Card className="bg-red-900 border-red-700">
+            <CardContent>
+              <p className="text-red-100">{error}</p>
+            </CardContent>
+          </Card>
         )}
-
-        <div className="bg-white/10 backdrop-blur-md rounded-xl p-6 shadow-2xl mb-6">
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <Input
-              type="text"
-              value={task}
-              onChange={(e) => setTask(e.target.value)}
-              placeholder="Enter your task here..."
-              className="w-full px-4 py-3 rounded-lg border-2 border-transparent bg-white/90 backdrop-blur-sm focus:outline-none focus:border-blue-400 transition-all duration-300"
-            />
-            <button 
-              type="submit" 
-              className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg disabled:bg-blue-400 hover:bg-blue-700 transition-all duration-300 transform hover:scale-[1.02] disabled:hover:scale-100"
-              disabled={loading || !task.trim()}
-            >
-              {loading ? (
-                <span className="flex items-center justify-center">
-                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Processing...
-                </span>
-              ) : 'Get Subtasks'}
-            </button>
-          </form>
-        </div>
 
         {subtasks.length > 0 && (
-          <div className="bg-white/10 backdrop-blur-md rounded-xl p-6 shadow-2xl mb-6 animate-fadeIn">
-            <h2 className="text-xl font-semibold mb-4 text-white">Select Subtasks</h2>
-            <div className="space-y-3">
-              {subtasks.map((subtask, index) => (
-                <label key={index} className="flex items-center p-3 rounded-lg bg-white/20 hover:bg-white/30 transition-colors duration-200 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={selectedSubtasks.includes(index)}
-                    onChange={() => handleSubtaskSelection(index)}
-                    className="mr-3 h-4 w-4"
-                  />
-                  <span className="text-white">{subtask.description} - {subtask.time_estimate}</span>
-                </label>
-              ))}
-            </div>
-            <button 
-              onClick={handleGetStructure}
-              className="mt-4 w-full px-4 py-3 bg-emerald-600 text-white rounded-lg disabled:bg-emerald-400 hover:bg-emerald-700 transition-all duration-300 transform hover:scale-[1.02] disabled:hover:scale-100"
-              disabled={loading || selectedSubtasks.length === 0}
-            >
-              {loading ? 'Generating Structure...' : 'Generate Plan'}
-            </button>
-          </div>
-        )}
+          <Card className="bg-gray-800 border-gray-700">
+            <CardHeader>
+              <CardTitle>Subtasks</CardTitle>
+              <CardDescription>Select tasks to include in your plan</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ul className="space-y-6">
+                {subtasks.map((subtask) => (
+                  <li key={subtask.id} className="border border-gray-700 rounded-lg p-4">
+                    <div className="flex items-start space-x-3">
+                      <Checkbox
+                        id={`task-${subtask.id}`}
+                        checked={selectedTasks.some((t) => t.id === subtask.id)}
+                        onCheckedChange={() => handleTaskSelection(subtask)}
+                      />
+                      <div className="flex-1 space-y-3">
+                        <div>
+                          <label htmlFor={`task-${subtask.id}`} className="font-medium cursor-pointer">
+                            {subtask.description}
+                          </label>
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            <Badge variant="secondary" className="flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              {formatTime(subtask.time_estimate_minutes)}
+                            </Badge>
+                            <Badge
+                              variant="secondary"
+                              className={`${getEnergyColor(subtask.mental_energy)}`}
+                            >
+                              {subtask.mental_energy} Energy
+                            </Badge>
+                            <Badge variant="outline">{subtask.task_type.replace('_', ' ')}</Badge>
+                            {subtask.dependencies.critical_path && (
+                              <Badge variant="destructive">Critical Path</Badge>
+                            )}
+                          </div>
+                        </div>
 
-        {structure.length > 0 && (
-          <div className="bg-white/10 backdrop-blur-md rounded-xl p-6 shadow-2xl animate-fadeIn">
-            <h2 className="text-xl font-semibold mb-4 text-white">Project Structure</h2>
-            <div className="space-y-6">
-              {structure.map((step, index) => (
-                <div key={index} className="bg-white/20 rounded-lg p-4">
-                  <h3 className="font-semibold text-white">{index + 1}. {step.step} - {step.time_estimate}</h3>
-                  <ul className="mt-2 space-y-2 list-disc list-inside">
-                    {step.details.map((detail, detailIndex) => (
-                      <li key={detailIndex} className="text-blue-100 ml-4">{detail}</li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          </div>
+                        {subtask.dependencies.prerequisite_tasks.length > 0 && (
+                          <div className="flex items-center gap-1 text-gray-400">
+                            <ArrowRight className="w-4 h-4" />
+                            Requires: {subtask.dependencies.prerequisite_tasks.map(String).join(", ")}
+                          </div>
+                        )}
+                        {subtask.dependencies.unlocks.length > 0 && (
+                          <div className="flex items-center gap-1 text-gray-400">
+                            <ArrowRight className="w-4 h-4" />
+                            Unlocks: {subtask.dependencies.unlocks.map(String).join(", ")}
+                          </div>
+                        )}
+
+
+                        <div className="flex flex-wrap gap-4 text-sm">
+                          {subtask.resources.tools.length > 0 && (
+                            <div className="flex items-center gap-1">
+                              <Wrench className="w-4 h-4 text-gray-400" />
+                              <span className="text-gray-400">
+                                Tools: {subtask.resources.tools.join(", ")}
+                              </span>
+                            </div>
+                          )}
+                          {subtask.resources.references.length > 0 && (
+                            <div className="flex items-center gap-1">
+                              <Link2 className="w-4 h-4 text-gray-400" />
+                              <span className="text-gray-400">
+                                References: {subtask.resources.references.join(", ")}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+            <CardFooter>
+              <Button onClick={handleGeneratePlan} disabled={selectedTasks.length === 0}>
+                Generate Plan
+              </Button>
+            </CardFooter>
+          </Card>
         )}
       </div>
     </div>
   )
 }
+
+export default TaskBreak
