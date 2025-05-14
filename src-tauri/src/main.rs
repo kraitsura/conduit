@@ -134,7 +134,7 @@ async fn get_subtasks(
         .post("https://api.openai.com/v1/chat/completions")
         .header("Authorization", format!("Bearer {}", state.api_key))
         .json(&serde_json::json!({
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-4-turbo-preview",
             "messages": [
                 {
                     "role": "system",
@@ -145,7 +145,7 @@ async fn get_subtasks(
                     "content": user_prompt
                 }
             ],
-            "max_tokens": 1000,
+            "max_tokens": 2000,
             "temperature": 0.7, 
             "response_format": { "type": "json_object" }
         }))
@@ -339,3 +339,5 @@ fn main() {
         }
     }
 }
+
+
