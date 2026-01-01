@@ -1,3 +1,15 @@
 node_modules
 .DS_Store
 .env
+CLAUDE.md
+
+# Rust
+**/target/
+**/*.rs.bk
+**/Cargo.lock
+
+# Database files
+**/*.db
+**/*.db-shm
+**/*.db-wal
+.conduit/
