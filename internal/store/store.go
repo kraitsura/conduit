@@ -70,6 +70,44 @@ func (s *Store) init() error {
 	CREATE INDEX IF NOT EXISTS idx_activities_project ON activities(project);
 	CREATE INDEX IF NOT EXISTS idx_activities_timestamp ON activities(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_sessions_project ON agent_sessions(project);
+
+	-- Conduit sessions (work windows bounded by 30-min gaps)
+	CREATE TABLE IF NOT EXISTS conduit_sessions (
+		id TEXT PRIMARY KEY,
+		project_path TEXT NOT NULL,
+		start_time INTEGER NOT NULL,
+		end_time INTEGER,
+		branch TEXT,
+		FOREIGN KEY (project_path) REFERENCES projects(path)
+	);
+
+	-- Agent chats within sessions
+	CREATE TABLE IF NOT EXISTS agent_chats (
+		id TEXT PRIMARY KEY,
+		conduit_session_id TEXT,
+		agent_type TEXT NOT NULL,
+		name TEXT,
+		project_path TEXT NOT NULL,
+		start_time INTEGER NOT NULL,
+		end_time INTEGER,
+		message_count INTEGER DEFAULT 0,
+		FOREIGN KEY (conduit_session_id) REFERENCES conduit_sessions(id),
+		FOREIGN KEY (project_path) REFERENCES projects(path)
+	);
+
+	-- Link commits to sessions
+	CREATE TABLE IF NOT EXISTS session_commits (
+		session_id TEXT NOT NULL,
+		commit_hash TEXT NOT NULL,
+		PRIMARY KEY (session_id, commit_hash),
+		FOREIGN KEY (session_id) REFERENCES conduit_sessions(id)
+	);
+
+	-- Indexes for session queries
+	CREATE INDEX IF NOT EXISTS idx_conduit_sessions_project ON conduit_sessions(project_path);
+	CREATE INDEX IF NOT EXISTS idx_conduit_sessions_time ON conduit_sessions(start_time);
+	CREATE INDEX IF NOT EXISTS idx_agent_chats_project ON agent_chats(project_path);
+	CREATE INDEX IF NOT EXISTS idx_agent_chats_session ON agent_chats(conduit_session_id);
 	`
 
 	_, err := s.db.Exec(schema)

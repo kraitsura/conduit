@@ -184,7 +184,12 @@ func (d *Daemon) run(ctx context.Context, cancel context.CancelFunc) {
 	idleCheck := time.NewTicker(1 * time.Minute)
 	defer idleCheck.Stop()
 
+	// Sync Claude chats less frequently
+	chatSync := time.NewTicker(30 * time.Second)
+	defer chatSync.Stop()
+
 	d.poll()
+	d.syncClaudeChats()
 
 	for {
 		select {
@@ -193,6 +198,10 @@ func (d *Daemon) run(ctx context.Context, cancel context.CancelFunc) {
 
 		case <-ticker.C:
 			d.poll()
+
+		case <-chatSync.C:
+			d.syncClaudeChats()
+			d.checkSessionTimeouts()
 
 		case <-idleCheck.C:
 			// Auto-shutdown if idle too long
@@ -221,6 +230,9 @@ func (d *Daemon) poll() {
 			log.Printf("+ %s (PID %d) in %s", a.Type, a.PID, a.ProjectPath)
 			d.agents[a.PID] = a
 			d.lastActivity = time.Now()
+
+			// Ensure there's an active conduit session for this project
+			d.ensureActiveSession(a.ProjectPath)
 
 			d.store.StartAgentSession(&a)
 			d.store.LogActivity(&types.Activity{
@@ -320,6 +332,21 @@ func (d *Daemon) handleConnection(conn net.Conn) {
 	case "refresh":
 		d.discoverProjects()
 		resp = Response{Status: "ok"}
+	case "current_session":
+		sessResp := d.handleCurrentSession(req.Project)
+		resp = sessResp.Response
+		encoder.Encode(sessResp)
+		return
+	case "sessions":
+		sessResp := d.handleSessions(req.Project, 0, 0, false, req.Limit)
+		resp = sessResp.Response
+		encoder.Encode(sessResp)
+		return
+	case "project_summary":
+		sessResp := d.handleProjectSummary(req.Project)
+		resp = sessResp.Response
+		encoder.Encode(sessResp)
+		return
 	default:
 		resp = Response{Status: "error", Error: "unknown command"}
 	}
