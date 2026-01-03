@@ -529,7 +529,8 @@ func TestActivityTrackingScenarios(t *testing.T) {
 
 // TestCommandHandlerRouting tests command routing logic.
 func TestCommandHandlerRouting(t *testing.T) {
-	validCommands := []string{"status", "projects", "agents", "activities", "refresh"}
+	validCommands := []string{"status", "projects", "agents", "activities", "refresh",
+		"current_session", "sessions", "project_summary"}
 	invalidCommands := []string{"", "unknown", "shutdown", "restart", "STOP"}
 
 	t.Run("valid commands", func(t *testing.T) {
@@ -554,7 +555,8 @@ func TestCommandHandlerRouting(t *testing.T) {
 // isValidCommand checks if a command is valid (mirrors daemon logic).
 func isValidCommand(cmd string) bool {
 	switch cmd {
-	case "status", "projects", "agents", "activities", "refresh":
+	case "status", "projects", "agents", "activities", "refresh",
+		"current_session", "sessions", "project_summary":
 		return true
 	default:
 		return false
@@ -606,6 +608,216 @@ func containsString(data []byte, s string) bool {
 		}
 	}
 	return false
+}
+
+// TestSessionsRequestJSON verifies SessionsRequest JSON serialization.
+func TestSessionsRequestJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		request SessionsRequest
+		check   func(t *testing.T, data []byte)
+	}{
+		{
+			name: "sessions command with project",
+			request: SessionsRequest{
+				Request: Request{
+					Command: "sessions",
+					Project: "/home/user/project",
+					Limit:   50,
+				},
+			},
+			check: func(t *testing.T, data []byte) {
+				if !containsString(data, `"command":"sessions"`) {
+					t.Error("missing command field")
+				}
+				if !containsString(data, `"project":"/home/user/project"`) {
+					t.Error("missing project field")
+				}
+			},
+		},
+		{
+			name: "sessions with time filter",
+			request: SessionsRequest{
+				Request: Request{Command: "sessions"},
+				Since:   1704067200, // Example Unix timestamp
+				Until:   1704153600,
+			},
+			check: func(t *testing.T, data []byte) {
+				if !containsString(data, `"since":1704067200`) {
+					t.Error("missing since field")
+				}
+				if !containsString(data, `"until":1704153600`) {
+					t.Error("missing until field")
+				}
+			},
+		},
+		{
+			name: "active only flag",
+			request: SessionsRequest{
+				Request:    Request{Command: "sessions"},
+				ActiveOnly: true,
+			},
+			check: func(t *testing.T, data []byte) {
+				if !containsString(data, `"active_only":true`) {
+					t.Error("missing active_only field")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.request)
+			if err != nil {
+				t.Fatalf("marshal failed: %v", err)
+			}
+			tt.check(t, data)
+
+			// Verify roundtrip
+			var decoded SessionsRequest
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("unmarshal failed: %v", err)
+			}
+			if decoded.Command != tt.request.Command {
+				t.Errorf("Command: got %q, want %q", decoded.Command, tt.request.Command)
+			}
+		})
+	}
+}
+
+// TestSessionsResponseJSON verifies SessionsResponse JSON serialization.
+func TestSessionsResponseJSON(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+
+	tests := []struct {
+		name     string
+		response SessionsResponse
+		check    func(t *testing.T, data []byte)
+	}{
+		{
+			name: "success with sessions",
+			response: SessionsResponse{
+				Response: Response{Status: "ok"},
+				Sessions: []types.ConduitSession{
+					{
+						ID:          "test-session-1",
+						ProjectPath: "/project",
+						ProjectName: "project",
+						StartTime:   now,
+						IsActive:    true,
+					},
+				},
+			},
+			check: func(t *testing.T, data []byte) {
+				if !containsString(data, `"status":"ok"`) {
+					t.Error("missing status field")
+				}
+				if !containsString(data, `"sessions"`) {
+					t.Error("missing sessions field")
+				}
+			},
+		},
+		{
+			name: "with current session",
+			response: SessionsResponse{
+				Response: Response{Status: "ok"},
+				CurrentSession: &types.ConduitSession{
+					ID:          "current-1",
+					ProjectPath: "/project",
+					IsActive:    true,
+				},
+			},
+			check: func(t *testing.T, data []byte) {
+				if !containsString(data, `"current_session"`) {
+					t.Error("missing current_session field")
+				}
+			},
+		},
+		{
+			name: "with project summary",
+			response: SessionsResponse{
+				Response: Response{Status: "ok"},
+				ProjectSummary: &types.ProjectSummary{
+					Path:          "/project",
+					Name:          "project",
+					SessionsToday: 3,
+					CommitsToday:  5,
+				},
+			},
+			check: func(t *testing.T, data []byte) {
+				if !containsString(data, `"project_summary"`) {
+					t.Error("missing project_summary field")
+				}
+			},
+		},
+		{
+			name: "error response",
+			response: SessionsResponse{
+				Response: Response{
+					Status: "error",
+					Error:  "session not found",
+				},
+			},
+			check: func(t *testing.T, data []byte) {
+				if !containsString(data, `"status":"error"`) {
+					t.Error("missing status field")
+				}
+				if !containsString(data, `"error":"session not found"`) {
+					t.Error("missing error field")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.response)
+			if err != nil {
+				t.Fatalf("marshal failed: %v", err)
+			}
+			tt.check(t, data)
+
+			// Verify roundtrip
+			var decoded SessionsResponse
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("unmarshal failed: %v", err)
+			}
+			if decoded.Status != tt.response.Status {
+				t.Errorf("Status: got %q, want %q", decoded.Status, tt.response.Status)
+			}
+		})
+	}
+}
+
+// TestSessionsResponseOmitempty verifies empty session fields are omitted.
+func TestSessionsResponseOmitempty(t *testing.T) {
+	resp := SessionsResponse{Response: Response{Status: "ok"}}
+	data, _ := json.Marshal(resp)
+
+	omitFields := []string{"sessions", "current_session", "project_summary"}
+	for _, field := range omitFields {
+		if containsString(data, `"`+field+`"`) {
+			t.Errorf("empty %s should be omitted", field)
+		}
+	}
+}
+
+// TestSessionCommandsRouting tests session-specific command routing.
+func TestSessionCommandsRouting(t *testing.T) {
+	sessionCommands := map[string]bool{
+		"current_session": true,
+		"sessions":        true,
+		"project_summary": true,
+	}
+
+	for cmd, expected := range sessionCommands {
+		t.Run(cmd, func(t *testing.T) {
+			isValid := isValidCommand(cmd)
+			if isValid != expected {
+				t.Errorf("isValidCommand(%q) = %v, want %v", cmd, isValid, expected)
+			}
+		})
+	}
 }
 
 // BenchmarkRequestMarshal measures request serialization performance.
