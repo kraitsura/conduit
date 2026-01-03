@@ -659,3 +659,346 @@ func BenchmarkLogActivity(b *testing.B) {
 		store.LogActivity(&activity)
 	}
 }
+
+// TestSaveInsight verifies insight persistence.
+func TestSaveInsight(t *testing.T) {
+	store := testDB(t)
+	now := time.Now().Truncate(time.Second)
+
+	t.Run("save note", func(t *testing.T) {
+		insight := &types.Insight{
+			ID:          "abc123",
+			Type:        types.InsightNote,
+			Content:     "This is a test note",
+			ProjectPath: "/home/user/projects/app",
+			Branch:      "main",
+			CreatedAt:   now,
+		}
+
+		err := store.SaveInsight(insight)
+		if err != nil {
+			t.Fatalf("SaveInsight failed: %v", err)
+		}
+	})
+
+	t.Run("save bug", func(t *testing.T) {
+		insight := &types.Insight{
+			ID:          "def456",
+			Type:        types.InsightBug,
+			Content:     "Login fails on timeout",
+			ProjectPath: "/home/user/projects/app",
+			Branch:      "feature/auth",
+			CreatedAt:   now,
+		}
+
+		err := store.SaveInsight(insight)
+		if err != nil {
+			t.Fatalf("SaveInsight failed: %v", err)
+		}
+	})
+
+	t.Run("save idea", func(t *testing.T) {
+		insight := &types.Insight{
+			ID:          "ghi789",
+			Type:        types.InsightIdea,
+			Content:     "Could batch these API calls",
+			ProjectPath: "/home/user/projects/app",
+			CreatedAt:   now,
+		}
+
+		err := store.SaveInsight(insight)
+		if err != nil {
+			t.Fatalf("SaveInsight failed: %v", err)
+		}
+	})
+
+	t.Run("save without project", func(t *testing.T) {
+		insight := &types.Insight{
+			ID:        "jkl012",
+			Type:      types.InsightNote,
+			Content:   "General note without project",
+			CreatedAt: now,
+		}
+
+		err := store.SaveInsight(insight)
+		if err != nil {
+			t.Fatalf("SaveInsight failed: %v", err)
+		}
+	})
+}
+
+// TestGetInsights verifies insight retrieval and filtering.
+func TestGetInsights(t *testing.T) {
+	store := testDB(t)
+	now := time.Now().Truncate(time.Second)
+
+	// Seed test data
+	insights := []types.Insight{
+		{ID: "001", Type: types.InsightNote, Content: "Note 1", ProjectPath: "/p/app1", CreatedAt: now.Add(-3 * time.Hour)},
+		{ID: "002", Type: types.InsightBug, Content: "Bug 1", ProjectPath: "/p/app1", CreatedAt: now.Add(-2 * time.Hour)},
+		{ID: "003", Type: types.InsightIdea, Content: "Idea 1", ProjectPath: "/p/app1", CreatedAt: now.Add(-1 * time.Hour)},
+		{ID: "004", Type: types.InsightNote, Content: "Note 2", ProjectPath: "/p/app2", CreatedAt: now},
+		{ID: "005", Type: types.InsightBug, Content: "Bug 2", ProjectPath: "/p/app2", CreatedAt: now.Add(-30 * time.Minute)},
+	}
+
+	for _, ins := range insights {
+		if err := store.SaveInsight(&ins); err != nil {
+			t.Fatalf("SaveInsight failed: %v", err)
+		}
+	}
+
+	t.Run("get all insights", func(t *testing.T) {
+		result, err := store.GetInsights(types.InsightFilter{})
+		if err != nil {
+			t.Fatalf("GetInsights failed: %v", err)
+		}
+
+		if len(result) != 5 {
+			t.Errorf("expected 5 insights, got %d", len(result))
+		}
+
+		// Should be ordered by created_at DESC
+		if len(result) >= 2 && result[0].CreatedAt.Before(result[1].CreatedAt) {
+			t.Error("insights not ordered by created_at DESC")
+		}
+	})
+
+	t.Run("filter by project", func(t *testing.T) {
+		result, err := store.GetInsights(types.InsightFilter{
+			ProjectPath: "/p/app1",
+		})
+		if err != nil {
+			t.Fatalf("GetInsights failed: %v", err)
+		}
+
+		if len(result) != 3 {
+			t.Errorf("expected 3 insights for app1, got %d", len(result))
+		}
+
+		for _, ins := range result {
+			if ins.ProjectPath != "/p/app1" {
+				t.Errorf("got insight for %q, want /p/app1", ins.ProjectPath)
+			}
+		}
+	})
+
+	t.Run("filter by type", func(t *testing.T) {
+		result, err := store.GetInsights(types.InsightFilter{
+			Type: types.InsightBug,
+		})
+		if err != nil {
+			t.Fatalf("GetInsights failed: %v", err)
+		}
+
+		if len(result) != 2 {
+			t.Errorf("expected 2 bugs, got %d", len(result))
+		}
+
+		for _, ins := range result {
+			if ins.Type != types.InsightBug {
+				t.Errorf("got type %q, want bug", ins.Type)
+			}
+		}
+	})
+
+	t.Run("filter by time", func(t *testing.T) {
+		result, err := store.GetInsights(types.InsightFilter{
+			Since: now.Add(-90 * time.Minute),
+		})
+		if err != nil {
+			t.Fatalf("GetInsights failed: %v", err)
+		}
+
+		if len(result) != 3 {
+			t.Errorf("expected 3 recent insights, got %d", len(result))
+		}
+	})
+
+	t.Run("filter with limit", func(t *testing.T) {
+		result, err := store.GetInsights(types.InsightFilter{
+			Limit: 2,
+		})
+		if err != nil {
+			t.Fatalf("GetInsights failed: %v", err)
+		}
+
+		if len(result) != 2 {
+			t.Errorf("expected 2 insights with limit, got %d", len(result))
+		}
+	})
+
+	t.Run("combined filters", func(t *testing.T) {
+		result, err := store.GetInsights(types.InsightFilter{
+			ProjectPath: "/p/app1",
+			Type:        types.InsightNote,
+		})
+		if err != nil {
+			t.Fatalf("GetInsights failed: %v", err)
+		}
+
+		if len(result) != 1 {
+			t.Errorf("expected 1 note in app1, got %d", len(result))
+		}
+	})
+}
+
+// TestDeleteInsight verifies insight deletion.
+func TestDeleteInsight(t *testing.T) {
+	store := testDB(t)
+	now := time.Now().Truncate(time.Second)
+
+	t.Run("delete existing insight", func(t *testing.T) {
+		insight := &types.Insight{
+			ID:        "del001",
+			Type:      types.InsightNote,
+			Content:   "To be deleted",
+			CreatedAt: now,
+		}
+		store.SaveInsight(insight)
+
+		err := store.DeleteInsight("del001")
+		if err != nil {
+			t.Fatalf("DeleteInsight failed: %v", err)
+		}
+
+		// Verify it's gone
+		result, _ := store.GetInsights(types.InsightFilter{})
+		for _, ins := range result {
+			if ins.ID == "del001" {
+				t.Error("insight was not deleted")
+			}
+		}
+	})
+
+	t.Run("delete non-existent insight", func(t *testing.T) {
+		err := store.DeleteInsight("nonexistent")
+		if err == nil {
+			t.Error("expected error when deleting non-existent insight")
+		}
+	})
+}
+
+// TestDeleteAllInsights verifies bulk deletion.
+func TestDeleteAllInsights(t *testing.T) {
+	store := testDB(t)
+	now := time.Now().Truncate(time.Second)
+
+	// Seed data
+	insights := []types.Insight{
+		{ID: "bulk001", Type: types.InsightNote, Content: "Note 1", ProjectPath: "/p/app1", CreatedAt: now},
+		{ID: "bulk002", Type: types.InsightBug, Content: "Bug 1", ProjectPath: "/p/app1", CreatedAt: now},
+		{ID: "bulk003", Type: types.InsightNote, Content: "Note 2", ProjectPath: "/p/app2", CreatedAt: now},
+	}
+
+	for _, ins := range insights {
+		store.SaveInsight(&ins)
+	}
+
+	t.Run("delete all for project", func(t *testing.T) {
+		count, err := store.DeleteAllInsights("/p/app1")
+		if err != nil {
+			t.Fatalf("DeleteAllInsights failed: %v", err)
+		}
+
+		if count != 2 {
+			t.Errorf("expected 2 deleted, got %d", count)
+		}
+
+		// Verify app2 insight still exists
+		result, _ := store.GetInsights(types.InsightFilter{ProjectPath: "/p/app2"})
+		if len(result) != 1 {
+			t.Error("app2 insight was incorrectly deleted")
+		}
+	})
+
+	t.Run("delete all globally", func(t *testing.T) {
+		// Add more insights
+		store.SaveInsight(&types.Insight{ID: "glob001", Type: types.InsightNote, Content: "Global 1", CreatedAt: now})
+		store.SaveInsight(&types.Insight{ID: "glob002", Type: types.InsightNote, Content: "Global 2", CreatedAt: now})
+
+		count, err := store.DeleteAllInsights("")
+		if err != nil {
+			t.Fatalf("DeleteAllInsights failed: %v", err)
+		}
+
+		if count < 2 {
+			t.Errorf("expected at least 2 deleted, got %d", count)
+		}
+
+		// Verify all gone
+		result, _ := store.GetInsights(types.InsightFilter{})
+		if len(result) != 0 {
+			t.Errorf("expected 0 insights after delete all, got %d", len(result))
+		}
+	})
+}
+
+// TestGetInsightCounts verifies count aggregation.
+func TestGetInsightCounts(t *testing.T) {
+	store := testDB(t)
+	now := time.Now().Truncate(time.Second)
+
+	// Seed data
+	insights := []types.Insight{
+		{ID: "cnt001", Type: types.InsightNote, Content: "Note 1", ProjectPath: "/p/app", CreatedAt: now},
+		{ID: "cnt002", Type: types.InsightNote, Content: "Note 2", ProjectPath: "/p/app", CreatedAt: now},
+		{ID: "cnt003", Type: types.InsightBug, Content: "Bug 1", ProjectPath: "/p/app", CreatedAt: now},
+		{ID: "cnt004", Type: types.InsightIdea, Content: "Idea 1", ProjectPath: "/p/app", CreatedAt: now},
+		{ID: "cnt005", Type: types.InsightIdea, Content: "Idea 2", ProjectPath: "/p/app", CreatedAt: now},
+		{ID: "cnt006", Type: types.InsightIdea, Content: "Idea 3", ProjectPath: "/p/app", CreatedAt: now},
+	}
+
+	for _, ins := range insights {
+		store.SaveInsight(&ins)
+	}
+
+	t.Run("count by project", func(t *testing.T) {
+		notes, bugs, ideas, err := store.GetInsightCounts("/p/app", time.Time{})
+		if err != nil {
+			t.Fatalf("GetInsightCounts failed: %v", err)
+		}
+
+		if notes != 2 {
+			t.Errorf("expected 2 notes, got %d", notes)
+		}
+		if bugs != 1 {
+			t.Errorf("expected 1 bug, got %d", bugs)
+		}
+		if ideas != 3 {
+			t.Errorf("expected 3 ideas, got %d", ideas)
+		}
+	})
+
+	t.Run("count all projects", func(t *testing.T) {
+		notes, bugs, ideas, err := store.GetInsightCounts("", time.Time{})
+		if err != nil {
+			t.Fatalf("GetInsightCounts failed: %v", err)
+		}
+
+		total := notes + bugs + ideas
+		if total != 6 {
+			t.Errorf("expected 6 total, got %d", total)
+		}
+	})
+
+	t.Run("count with time filter", func(t *testing.T) {
+		// Add an old insight
+		store.SaveInsight(&types.Insight{
+			ID:          "old001",
+			Type:        types.InsightNote,
+			Content:     "Old note",
+			ProjectPath: "/p/app",
+			CreatedAt:   now.Add(-48 * time.Hour),
+		})
+
+		notes, _, _, err := store.GetInsightCounts("/p/app", now.Add(-24*time.Hour))
+		if err != nil {
+			t.Fatalf("GetInsightCounts failed: %v", err)
+		}
+
+		// Should not count the old note
+		if notes != 2 {
+			t.Errorf("expected 2 recent notes, got %d", notes)
+		}
+	})
+}
