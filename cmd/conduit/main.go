@@ -18,18 +18,20 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		// Default: show current project status or global status
-		showStatus("")
+		// Default: show context-aware status
+		showContextAwareStatus(nil)
+		return
+	}
+
+	// Handle global flag at top level
+	if os.Args[1] == "--global" || os.Args[1] == "-g" {
+		showContextAwareStatus(os.Args[1:])
 		return
 	}
 
 	switch os.Args[1] {
 	case "status", "s":
-		projectName := ""
-		if len(os.Args) > 2 {
-			projectName = os.Args[2]
-		}
-		showStatus(projectName)
+		showContextAwareStatus(os.Args[2:])
 
 	case "projects", "p", "ls":
 		listProjects()
@@ -43,6 +45,26 @@ func main() {
 
 	case "agents", "a":
 		showAgents()
+
+	case "sessions":
+		showSessions(os.Args[2:])
+
+	case "search":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: conduit search <query>")
+			return
+		}
+		searchSessions(os.Args[2], os.Args[3:])
+
+	case "stats":
+		showStats(os.Args[2:])
+
+	case "cd":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: conduit cd <project>")
+			return
+		}
+		printProjectPath(os.Args[2])
 
 	case "init":
 		initConduit()
@@ -104,7 +126,7 @@ func sendRequest(req Request) (*Response, error) {
 	}
 
 	if resp.Status == "error" {
-		return nil, fmt.Errorf(resp.Error)
+		return nil, fmt.Errorf("%s", resp.Error)
 	}
 
 	return &resp, nil
@@ -374,20 +396,32 @@ Conduit - Agentic Developer Observability
 Usage: conduit [command]
 
 Commands:
-  (default)     Show status (current project or global)
+  (default)     Show status (adapts to context)
   status, s     Show status for a project
   projects, p   List all tracked projects
   agents, a     Show active AI agents
+  sessions      Show session history
+  search        Search sessions by name
+  stats         Show statistics
   log, l        Show activity log
+  cd            Print project path (for shell)
   init          Initialize config
   help, h       Show this help
+
+Flags:
+  --global, -g  Show global view (all projects)
+  --today, -t   Filter to today
+  --week, -w    Filter to this week
 
 The daemon auto-starts when needed and auto-stops after 30 min idle.
 
 Examples:
-  conduit              # Status of current project
-  conduit agents       # Show all active AI agents
-  conduit projects     # List tracked projects
+  conduit                    # Context-aware status
+  conduit --global           # Global overview
+  conduit sessions --today   # Today's sessions
+  conduit search "auth"      # Search sessions
+  conduit stats --week       # Weekly statistics
+  conduit cd myproject       # Print project path
 `
 	fmt.Println(help)
 }
