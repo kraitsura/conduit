@@ -65,6 +65,33 @@ const (
 	ActivityFileChange = "file_change"
 )
 
+// Insight represents a user-captured note, bug, or idea
+type Insight struct {
+	ID          string    `json:"id"`
+	Type        string    `json:"type"` // note, bug, idea
+	Content     string    `json:"content"`
+	ProjectPath string    `json:"project_path,omitempty"`
+	Branch      string    `json:"branch,omitempty"`
+	FilePath    string    `json:"file_path,omitempty"`
+	SessionID   string    `json:"session_id,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// InsightType constants
+const (
+	InsightNote = "note"
+	InsightBug  = "bug"
+	InsightIdea = "idea"
+)
+
+// InsightFilter is used to query insights
+type InsightFilter struct {
+	ProjectPath string
+	Type        string // note, bug, idea, or empty for all
+	Since       time.Time
+	Limit       int
+}
+
 // ProjectStats contains aggregated project statistics
 type ProjectStats struct {
 	TotalAgentTime   time.Duration `json:"total_agent_time"`

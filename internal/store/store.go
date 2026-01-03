@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -103,11 +104,30 @@ func (s *Store) init() error {
 		FOREIGN KEY (session_id) REFERENCES conduit_sessions(id)
 	);
 
+	-- Insights: notes, bugs, ideas captured by user
+	CREATE TABLE IF NOT EXISTS insights (
+		id TEXT PRIMARY KEY,
+		type TEXT NOT NULL,
+		content TEXT NOT NULL,
+		project_path TEXT,
+		branch TEXT,
+		file_path TEXT,
+		session_id TEXT,
+		created_at INTEGER NOT NULL,
+		FOREIGN KEY (project_path) REFERENCES projects(path),
+		FOREIGN KEY (session_id) REFERENCES conduit_sessions(id)
+	);
+
 	-- Indexes for session queries
 	CREATE INDEX IF NOT EXISTS idx_conduit_sessions_project ON conduit_sessions(project_path);
 	CREATE INDEX IF NOT EXISTS idx_conduit_sessions_time ON conduit_sessions(start_time);
 	CREATE INDEX IF NOT EXISTS idx_agent_chats_project ON agent_chats(project_path);
 	CREATE INDEX IF NOT EXISTS idx_agent_chats_session ON agent_chats(conduit_session_id);
+
+	-- Indexes for insights
+	CREATE INDEX IF NOT EXISTS idx_insights_project ON insights(project_path);
+	CREATE INDEX IF NOT EXISTS idx_insights_type ON insights(type);
+	CREATE INDEX IF NOT EXISTS idx_insights_created ON insights(created_at);
 	`
 
 	_, err := s.db.Exec(schema)
@@ -279,4 +299,141 @@ type ActivityData map[string]interface{}
 func (d ActivityData) Encode() string {
 	data, _ := json.Marshal(d)
 	return string(data)
+}
+
+// SaveInsight stores a new insight
+func (s *Store) SaveInsight(insight *types.Insight) error {
+	_, err := s.db.Exec(`
+		INSERT INTO insights (id, type, content, project_path, branch, file_path, session_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, insight.ID, insight.Type, insight.Content, insight.ProjectPath, insight.Branch, insight.FilePath, insight.SessionID, insight.CreatedAt.Unix())
+	return err
+}
+
+// GetInsights retrieves insights with optional filtering
+func (s *Store) GetInsights(filter types.InsightFilter) ([]types.Insight, error) {
+	query := `
+		SELECT id, type, content, project_path, branch, file_path, session_id, created_at
+		FROM insights
+		WHERE 1=1
+	`
+	args := []interface{}{}
+
+	if filter.ProjectPath != "" {
+		query += " AND project_path = ?"
+		args = append(args, filter.ProjectPath)
+	}
+
+	if filter.Type != "" {
+		query += " AND type = ?"
+		args = append(args, filter.Type)
+	}
+
+	if !filter.Since.IsZero() {
+		query += " AND created_at >= ?"
+		args = append(args, filter.Since.Unix())
+	}
+
+	query += " ORDER BY created_at DESC"
+
+	if filter.Limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, filter.Limit)
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var insights []types.Insight
+	for rows.Next() {
+		var i types.Insight
+		var createdAt int64
+		var projectPath, branch, filePath, sessionID sql.NullString
+
+		if err := rows.Scan(&i.ID, &i.Type, &i.Content, &projectPath, &branch, &filePath, &sessionID, &createdAt); err != nil {
+			continue
+		}
+
+		i.CreatedAt = time.Unix(createdAt, 0)
+		if projectPath.Valid {
+			i.ProjectPath = projectPath.String
+		}
+		if branch.Valid {
+			i.Branch = branch.String
+		}
+		if filePath.Valid {
+			i.FilePath = filePath.String
+		}
+		if sessionID.Valid {
+			i.SessionID = sessionID.String
+		}
+		insights = append(insights, i)
+	}
+
+	return insights, nil
+}
+
+// DeleteInsight removes an insight by ID
+func (s *Store) DeleteInsight(id string) error {
+	result, err := s.db.Exec("DELETE FROM insights WHERE id = ?", id)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("insight not found: %s", id)
+	}
+	return nil
+}
+
+// DeleteAllInsights removes all insights for a project (or all if projectPath is empty)
+func (s *Store) DeleteAllInsights(projectPath string) (int64, error) {
+	var result sql.Result
+	var err error
+	if projectPath == "" {
+		result, err = s.db.Exec("DELETE FROM insights")
+	} else {
+		result, err = s.db.Exec("DELETE FROM insights WHERE project_path = ?", projectPath)
+	}
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// GetInsightCounts returns counts by type for a project
+func (s *Store) GetInsightCounts(projectPath string, since time.Time) (notes, bugs, ideas int, err error) {
+	query := `
+		SELECT type, COUNT(*) FROM insights
+		WHERE (? = '' OR project_path = ?)
+		AND created_at >= ?
+		GROUP BY type
+	`
+
+	rows, err := s.db.Query(query, projectPath, projectPath, since.Unix())
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var t string
+		var count int
+		if err := rows.Scan(&t, &count); err != nil {
+			continue
+		}
+		switch t {
+		case types.InsightNote:
+			notes = count
+		case types.InsightBug:
+			bugs = count
+		case types.InsightIdea:
+			ideas = count
+		}
+	}
+
+	return notes, bugs, ideas, nil
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -13,6 +15,7 @@ import (
 	"github.com/kraitsura/conduit/internal/daemon"
 	"github.com/kraitsura/conduit/internal/git"
 	"github.com/kraitsura/conduit/internal/project"
+	"github.com/kraitsura/conduit/internal/store"
 	"github.com/kraitsura/conduit/internal/types"
 )
 
@@ -58,6 +61,39 @@ func main() {
 
 	case "stats":
 		showStats(os.Args[2:])
+
+	case "note":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: conduit note \"<content>\"")
+			return
+		}
+		captureInsight(types.InsightNote, strings.Join(os.Args[2:], " "))
+
+	case "bug":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: conduit bug \"<content>\"")
+			return
+		}
+		captureInsight(types.InsightBug, strings.Join(os.Args[2:], " "))
+
+	case "idea":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: conduit idea \"<content>\"")
+			return
+		}
+		captureInsight(types.InsightIdea, strings.Join(os.Args[2:], " "))
+
+	case "notes":
+		if len(os.Args) > 2 && os.Args[2] == "delete" {
+			if len(os.Args) < 4 {
+				fmt.Println("Usage: conduit notes delete <id>")
+				fmt.Println("       conduit notes delete --all")
+				return
+			}
+			deleteInsight(os.Args[3])
+			return
+		}
+		showNotes(os.Args[2:])
 
 	case "cd":
 		if len(os.Args) < 3 {
@@ -404,6 +440,14 @@ Commands:
   search        Search sessions by name
   stats         Show statistics
   log, l        Show activity log
+
+Capture:
+  note "..."    Capture a note
+  bug "..."     Log a bug
+  idea "..."    Capture an idea
+  notes         List captured insights
+
+Utility:
   cd            Print project path (for shell)
   init          Initialize config
   help, h       Show this help
@@ -416,14 +460,237 @@ Flags:
 The daemon auto-starts when needed and auto-stops after 30 min idle.
 
 Examples:
-  conduit                    # Context-aware status
-  conduit --global           # Global overview
-  conduit sessions --today   # Today's sessions
-  conduit search "auth"      # Search sessions
-  conduit stats --week       # Weekly statistics
-  conduit cd myproject       # Print project path
+  conduit                         # Context-aware status
+  conduit note "fix edge case"    # Capture a note
+  conduit bug "timeout on login"  # Log a bug
+  conduit notes --bugs            # List all bugs
+  conduit notes --today           # Today's insights
 `
 	fmt.Println(help)
+}
+
+// Insight capture commands
+
+func captureInsight(insightType, content string) {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("Error loading config: %v\n", err)
+		return
+	}
+
+	db, err := store.Open(cfg.DBPath)
+	if err != nil {
+		fmt.Printf("Error opening database: %v\n", err)
+		return
+	}
+	defer db.Close()
+
+	// Detect current context
+	cwd, _ := os.Getwd()
+	projectPath := ""
+	branch := ""
+
+	if git.IsGitRepo(cwd) {
+		projectPath = cwd
+		branch = git.GetCurrentBranch(cwd)
+	}
+
+	insight := &types.Insight{
+		ID:          generateID(),
+		Type:        insightType,
+		Content:     content,
+		ProjectPath: projectPath,
+		Branch:      branch,
+		CreatedAt:   time.Now(),
+	}
+
+	if err := db.SaveInsight(insight); err != nil {
+		fmt.Printf("Error saving insight: %v\n", err)
+		return
+	}
+
+	// Display confirmation
+	icon := insightIcon(insightType)
+	typeName := insightTypeName(insightType)
+	fmt.Printf("%s %s captured\n", icon, typeName)
+
+	if projectPath != "" {
+		fmt.Printf("  Linked to: %s", filepath.Base(projectPath))
+		if branch != "" {
+			fmt.Printf(", branch %s", branch)
+		}
+		fmt.Println()
+	}
+}
+
+func showNotes(args []string) {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("Error loading config: %v\n", err)
+		return
+	}
+
+	db, err := store.Open(cfg.DBPath)
+	if err != nil {
+		fmt.Printf("Error opening database: %v\n", err)
+		return
+	}
+	defer db.Close()
+
+	// Parse flags
+	filter := types.InsightFilter{
+		Limit: 20,
+	}
+
+	// Check if we're in a project
+	cwd, _ := os.Getwd()
+	if git.IsGitRepo(cwd) {
+		filter.ProjectPath = cwd
+	}
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--all", "-a":
+			filter.ProjectPath = "" // Show all projects
+		case "--notes":
+			filter.Type = types.InsightNote
+		case "--bugs":
+			filter.Type = types.InsightBug
+		case "--ideas":
+			filter.Type = types.InsightIdea
+		case "--today", "-t":
+			filter.Since = startOfDay(time.Now())
+		case "--week", "-w":
+			filter.Since = time.Now().AddDate(0, 0, -7)
+		case "-n":
+			if i+1 < len(args) {
+				fmt.Sscanf(args[i+1], "%d", &filter.Limit)
+				i++
+			}
+		}
+	}
+
+	insights, err := db.GetInsights(filter)
+	if err != nil {
+		fmt.Printf("Error fetching insights: %v\n", err)
+		return
+	}
+
+	if len(insights) == 0 {
+		fmt.Println("No insights found")
+		return
+	}
+
+	// Header
+	if filter.ProjectPath != "" {
+		fmt.Printf("\033[1mInsights for %s:\033[0m\n", filepath.Base(filter.ProjectPath))
+	} else {
+		fmt.Println("\033[1mAll Insights:\033[0m")
+	}
+
+	// Display insights
+	for _, ins := range insights {
+		icon := insightIcon(ins.Type)
+		ago := time.Since(ins.CreatedAt)
+
+		// Truncate content for display
+		content := ins.Content
+		if len(content) > 50 {
+			content = content[:47] + "..."
+		}
+
+		projectName := ""
+		if ins.ProjectPath != "" && filter.ProjectPath == "" {
+			projectName = fmt.Sprintf(" \033[36m%s\033[0m", filepath.Base(ins.ProjectPath))
+		}
+
+		fmt.Printf("  \033[90m%s\033[0m %s %s%s  \033[90m%s ago\033[0m\n", ins.ID[:6], icon, content, projectName, formatDuration(ago))
+	}
+
+	// Show counts
+	notes, bugs, ideas, _ := db.GetInsightCounts(filter.ProjectPath, filter.Since)
+	if notes+bugs+ideas > 0 {
+		fmt.Printf("\n  Total: %d notes, %d bugs, %d ideas\n", notes, bugs, ideas)
+	}
+}
+
+func generateID() string {
+	b := make([]byte, 6)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func insightIcon(insightType string) string {
+	switch insightType {
+	case types.InsightNote:
+		return "\033[34m[note]\033[0m"
+	case types.InsightBug:
+		return "\033[31m[bug]\033[0m"
+	case types.InsightIdea:
+		return "\033[33m[idea]\033[0m"
+	default:
+		return "[?]"
+	}
+}
+
+func insightTypeName(insightType string) string {
+	switch insightType {
+	case types.InsightNote:
+		return "Note"
+	case types.InsightBug:
+		return "Bug"
+	case types.InsightIdea:
+		return "Idea"
+	default:
+		return "Insight"
+	}
+}
+
+func startOfDay(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+func deleteInsight(arg string) {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("Error loading config: %v\n", err)
+		return
+	}
+
+	db, err := store.Open(cfg.DBPath)
+	if err != nil {
+		fmt.Printf("Error opening database: %v\n", err)
+		return
+	}
+	defer db.Close()
+
+	if arg == "--all" {
+		cwd, _ := os.Getwd()
+		projectPath := ""
+		if git.IsGitRepo(cwd) {
+			projectPath = cwd
+		}
+
+		count, err := db.DeleteAllInsights(projectPath)
+		if err != nil {
+			fmt.Printf("Error deleting insights: %v\n", err)
+			return
+		}
+
+		if projectPath != "" {
+			fmt.Printf("Deleted %d insights from %s\n", count, filepath.Base(projectPath))
+		} else {
+			fmt.Printf("Deleted %d insights\n", count)
+		}
+		return
+	}
+
+	// Delete by ID
+	if err := db.DeleteInsight(arg); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	fmt.Printf("Deleted insight %s\n", arg)
 }
 
 // Helpers
