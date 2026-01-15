@@ -190,3 +190,55 @@ func TestAgentColor(t *testing.T) {
 func timePtr(t time.Time) *time.Time {
 	return &t
 }
+
+func TestDayLabelsAlignment(t *testing.T) {
+	// Test that day labels correctly align with session data
+	// Index 0 = 6 days ago, Index 6 = today
+	days := []string{"S", "M", "T", "W", "T", "F", "S"}
+
+	tests := []struct {
+		name         string
+		todayWeekday time.Weekday
+		wantLabels   []string // expected labels from 6 days ago to today
+	}{
+		{
+			name:         "today is Sunday",
+			todayWeekday: time.Sunday,
+			wantLabels:   []string{"M", "T", "W", "T", "F", "S", "S"}, // Mon-Sun
+		},
+		{
+			name:         "today is Monday",
+			todayWeekday: time.Monday,
+			wantLabels:   []string{"T", "W", "T", "F", "S", "S", "M"}, // Tue-Mon
+		},
+		{
+			name:         "today is Wednesday",
+			todayWeekday: time.Wednesday,
+			wantLabels:   []string{"T", "F", "S", "S", "M", "T", "W"}, // Thu-Wed
+		},
+		{
+			name:         "today is Saturday",
+			todayWeekday: time.Saturday,
+			wantLabels:   []string{"S", "M", "T", "W", "T", "F", "S"}, // Sun-Sat
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			todayWeekday := int(tt.todayWeekday)
+			var gotLabels []string
+
+			for i := 0; i < 7; i++ {
+				daysAgo := 6 - i
+				weekday := (todayWeekday - daysAgo%7 + 7) % 7
+				gotLabels = append(gotLabels, days[weekday])
+			}
+
+			for i, want := range tt.wantLabels {
+				if gotLabels[i] != want {
+					t.Errorf("day %d: got %q, want %q (full got: %v)", i, gotLabels[i], want, gotLabels)
+				}
+			}
+		})
+	}
+}

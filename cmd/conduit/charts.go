@@ -48,20 +48,18 @@ func renderActivityCharts(sessions []types.ConduitSession) {
 		fmt.Printf("  %s\n", line)
 	}
 
-	// Add day labels below chart
-	days := []string{"M", "T", "W", "T", "F", "S", "S"}
+	// Add day labels below chart (last 7 days: index 0 = 6 days ago, index 6 = today)
+	days := []string{"S", "M", "T", "W", "T", "F", "S"}
 	now := time.Now()
-	startDay := int(now.Weekday())
-	if startDay == 0 {
-		startDay = 7 // Sunday becomes 7
-	}
-	startDay = (startDay + 1) % 7 // Adjust to start from correct day
+	todayWeekday := int(now.Weekday()) // Sunday = 0, Monday = 1, etc.
 
-	// Build day label string aligned with chart width
+	// Build day label string: start from 6 days ago, end with today
 	dayLabels := "  "
 	for i := 0; i < 7; i++ {
-		idx := (startDay + i) % 7
-		dayLabels += fmt.Sprintf("%-4s", days[idx])
+		// Calculate weekday for (today - 6 + i) days
+		daysAgo := 6 - i
+		weekday := (todayWeekday - daysAgo%7 + 7) % 7
+		dayLabels += fmt.Sprintf("%-4s", days[weekday])
 	}
 	fmt.Printf("  %s\n", dayLabels)
 
