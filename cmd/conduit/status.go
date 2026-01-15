@@ -27,6 +27,29 @@ const (
 	colorBlue   = "\033[34m"
 )
 
+// Idle threshold for chat activity (2 hours)
+const idleThreshold = 2 * time.Hour
+
+// ChatDisplay represents a chat for display in the grouped view
+type ChatDisplay struct {
+	AgentType    string
+	ChatName     string
+	Duration     time.Duration
+	MessageCount int
+	IsActive     bool
+	IsIdle       bool // no activity for 2+ hours
+	LastActivity time.Time
+}
+
+// ProjectGroup groups chats by project for display
+type ProjectGroup struct {
+	ProjectPath   string
+	ProjectName   string
+	Chats         []ChatDisplay
+	TotalDuration time.Duration
+	ActiveCount   int
+}
+
 // SessionsResponse matches daemon's SessionsResponse
 type SessionsResponse struct {
 	Status         string                 `json:"status"`
@@ -34,6 +57,224 @@ type SessionsResponse struct {
 	Sessions       []types.ConduitSession `json:"sessions,omitempty"`
 	CurrentSession *types.ConduitSession  `json:"current_session,omitempty"`
 	ProjectSummary *types.ProjectSummary  `json:"project_summary,omitempty"`
+}
+
+// Time window for showing chats in the dashboard (24 hours)
+const chatDisplayWindow = 24 * time.Hour
+
+// groupChatsByProject groups active sessions and agents into project groups for display
+func groupChatsByProject(sessResp *SessionsResponse, agents []types.Agent) []ProjectGroup {
+	projectMap := make(map[string]*ProjectGroup)
+	cutoffTime := time.Now().Add(-chatDisplayWindow)
+
+	// First, add chats from active sessions (filtered by recency)
+	if sessResp != nil {
+		for _, sess := range sessResp.Sessions {
+			if !sess.IsActive {
+				continue
+			}
+
+			projectPath := sess.ProjectPath
+			projectName := sess.ProjectName
+			if projectName == "" {
+				projectName = filepath.Base(projectPath)
+			}
+
+			if _, exists := projectMap[projectPath]; !exists {
+				projectMap[projectPath] = &ProjectGroup{
+					ProjectPath: projectPath,
+					ProjectName: projectName,
+					Chats:       []ChatDisplay{},
+				}
+			}
+
+			group := projectMap[projectPath]
+
+			for _, chat := range sess.Chats {
+				// Determine last activity time
+				lastActivity := chat.StartTime
+				if chat.EndTime != nil {
+					lastActivity = *chat.EndTime
+				}
+
+				// Skip chats that are too old (unless they're truly active)
+				if !chat.IsActive && lastActivity.Before(cutoffTime) {
+					continue
+				}
+
+				duration := chat.Duration()
+				isIdle := false
+				if chat.IsActive {
+					// Active process - not idle
+					isIdle = false
+				} else if time.Since(lastActivity) > idleThreshold {
+					isIdle = true
+				}
+
+				chatDisplay := ChatDisplay{
+					AgentType:    chat.AgentType,
+					ChatName:     chat.Name,
+					Duration:     duration,
+					MessageCount: chat.MessageCount,
+					IsActive:     chat.IsActive,
+					IsIdle:       isIdle,
+					LastActivity: lastActivity,
+				}
+
+				group.Chats = append(group.Chats, chatDisplay)
+				group.TotalDuration += duration
+				if chat.IsActive {
+					group.ActiveCount++
+				}
+			}
+		}
+	}
+
+	// Ensure agents without sessions are also represented
+	for _, agent := range agents {
+		projectPath := agent.ProjectPath
+		projectName := filepath.Base(projectPath)
+
+		if _, exists := projectMap[projectPath]; !exists {
+			projectMap[projectPath] = &ProjectGroup{
+				ProjectPath: projectPath,
+				ProjectName: projectName,
+				Chats:       []ChatDisplay{},
+			}
+		}
+
+		group := projectMap[projectPath]
+		duration := time.Since(agent.StartTime)
+
+		// Check if this agent is already represented in chats
+		found := false
+		for i := range group.Chats {
+			if group.Chats[i].IsActive && group.Chats[i].AgentType == agent.Type {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			chatDisplay := ChatDisplay{
+				AgentType:    agent.Type,
+				ChatName:     "",
+				Duration:     duration,
+				MessageCount: 0,
+				IsActive:     true,
+				IsIdle:       false,
+				LastActivity: agent.StartTime,
+			}
+			group.Chats = append(group.Chats, chatDisplay)
+			group.TotalDuration += duration
+			group.ActiveCount++
+		}
+	}
+
+	// Convert map to slice and sort
+	var groups []ProjectGroup
+	for _, group := range projectMap {
+		// Sort chats: active first, then by most recent (latest activity first)
+		sort.Slice(group.Chats, func(i, j int) bool {
+			if group.Chats[i].IsActive != group.Chats[j].IsActive {
+				return group.Chats[i].IsActive // active first
+			}
+			return group.Chats[i].LastActivity.After(group.Chats[j].LastActivity)
+		})
+		groups = append(groups, *group)
+	}
+
+	// Sort groups by active count, then by total duration
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].ActiveCount != groups[j].ActiveCount {
+			return groups[i].ActiveCount > groups[j].ActiveCount
+		}
+		return groups[i].TotalDuration > groups[j].TotalDuration
+	})
+
+	return groups
+}
+
+// renderProjectGroup renders a single project group with its chats
+func renderProjectGroup(group ProjectGroup) {
+	// Project header line
+	chatWord := "chat"
+	if len(group.Chats) != 1 {
+		chatWord = "chats"
+	}
+
+	// Show active count if there are active chats
+	activeStr := ""
+	if group.ActiveCount > 0 {
+		activeStr = fmt.Sprintf("  %s%d active%s", colorGreen, group.ActiveCount, colorReset)
+	}
+
+	fmt.Printf("  %s%s/%s%s%d %s%s\n",
+		colorBold, group.ProjectName, colorReset,
+		strings.Repeat(" ", max(1, 32-len(group.ProjectName))),
+		len(group.Chats), chatWord, activeStr)
+
+	// Render each chat
+	for _, chat := range group.Chats {
+		renderChatLine(chat)
+	}
+	fmt.Println()
+}
+
+// renderChatLine renders a single chat line with appropriate styling
+func renderChatLine(chat ChatDisplay) {
+	// Status indicator
+	indicator := "●"
+	indicatorColor := colorGreen
+	lineColor := ""
+	lineReset := ""
+
+	if chat.IsIdle {
+		indicator = "○"
+		indicatorColor = colorDim
+		lineColor = colorDim
+		lineReset = colorReset
+	} else if !chat.IsActive {
+		indicator = "○"
+		indicatorColor = colorDim
+	}
+
+	// Chat name (truncated)
+	name := truncate(chat.ChatName, 24)
+	if name == "" {
+		name = "(no title)"
+	}
+	name = fmt.Sprintf("\"%s\"", name)
+
+	// Time display:
+	// - Active: show duration (how long running)
+	// - Idle: show "Xm ago" (time since last activity)
+	timeStr := formatDuration(chat.Duration)
+	if !chat.IsActive {
+		ago := time.Since(chat.LastActivity)
+		timeStr = formatDuration(ago) + " ago"
+	}
+
+	// Message count
+	msgStr := ""
+	if chat.MessageCount > 0 {
+		msgStr = fmt.Sprintf("%d msgs", chat.MessageCount)
+	}
+
+	fmt.Printf("    %s%s%s %s%-8s%s %s%-26s%s  %8s  %s%s\n",
+		indicatorColor, indicator, colorReset,
+		lineColor, chat.AgentType, lineReset,
+		lineColor, name, lineReset,
+		timeStr,
+		msgStr, lineReset)
+}
+
+// max returns the larger of two ints
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // showContextAwareStatus displays status based on context
@@ -309,19 +550,17 @@ func showGlobalView() {
 	fmt.Printf("│  %s%s │\n", headerContent, strings.Repeat(" ", headerPadding))
 	fmt.Printf("╰%s╯\n", strings.Repeat("─", width-2))
 
-	// Active agents section
-	if len(resp.Agents) > 0 {
-		fmt.Printf("\n%s▶ ACTIVE NOW%s\n\n", colorBold, colorReset)
+	// Active projects section - grouped by project
+	projectGroups := groupChatsByProject(sessResp, resp.Agents)
+	if len(projectGroups) > 0 {
+		fmt.Printf("\n%s▶ ACTIVE PROJECTS%s\n\n", colorBold, colorReset)
 
-		for _, a := range resp.Agents {
-			projectName := filepath.Base(a.ProjectPath) + "/"
-			duration := time.Since(a.StartTime).Round(time.Minute)
-
-			fmt.Printf("  %-18s %-8s %s\n", projectName, a.Type, formatDuration(duration))
+		for _, group := range projectGroups {
+			renderProjectGroup(group)
 		}
 	}
 
-	fmt.Printf("\n%s\n", strings.Repeat("─", width))
+	fmt.Printf("%s\n", strings.Repeat("─", width))
 
 	// Projects section with activity bars
 	fmt.Printf("\n%s■ PROJECTS%s %s%s%s\n\n",
@@ -361,13 +600,9 @@ func showGlobalView() {
 		}
 
 		agentCount := countAgentsInProject(resp.Agents, p.Path)
-		agentStr := fmt.Sprintf("%s-       %s", colorDim, colorReset)
+		agentStr := fmt.Sprintf("%s-      %s", colorDim, colorReset)
 		if agentCount > 0 {
-			if agentCount == 1 {
-				agentStr = fmt.Sprintf("%s%d agent %s", colorGreen, agentCount, colorReset)
-			} else {
-				agentStr = fmt.Sprintf("%s%d agents%s", colorGreen, agentCount, colorReset)
-			}
+			agentStr = fmt.Sprintf("%s%d active%s", colorGreen, agentCount, colorReset)
 		}
 
 		// Activity bar
